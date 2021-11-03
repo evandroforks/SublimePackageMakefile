@@ -9,25 +9,25 @@
 #
 # All number references refer to the "Make manual" (see link above).
 name: Makefile
+scope: source.makefile
+
 file_extensions:
   - make
   - makedefs
   - GNUmakefile
-  - makefile
   - Makefile
-  - makefile.am
   - Makefile.am
-  - makefile.in
   - Makefile.in
   - OCamlMakefile
   - mak
   - mk
+
 first_line_match: |-
   (?xi:
-    ^\#! .* \bmake\b |                     # shebang
-    ^\# \s* -\*- [^*]* makefile [^*]* -\*- # editorconfig
+    ^ \#! .* \bmake\b |                          # shebang
+    ^ \s* \# .*? -\*- .*? \bmakefile\b .*? -\*-  # editorconfig
   )
-scope: source.makefile
+
 #-------------------------------------------------------------------------------
 variables:
 
@@ -276,20 +276,19 @@ contexts:
       pop: true
 
   recipe-inline:
-    - meta_content_scope: meta.function.body.makefile
+    - meta_content_scope: meta.function.body.makefile source.shell.embedded.makefile
     - include: recipe-junction-between-spaces-or-tabs
     - include: control-flow
     - match: $
       set: recipe-junction-between-spaces-or-tabs
-    - match: ""
-      push: shell
+    - include: shell-content
 
   recipe-with-spaces:
     - meta_content_scope: meta.function.body.makefile
     - match: ^([ ]+)([-@]{1,2})?
       captures:
         2: constant.language.makefile
-      push: shell
+      push: shell-common
     - match: ^(\t)([-@]{1,2})?
       captures:
         1: invalid.illegal.inconsistent.expected.spaces.makefile
@@ -303,7 +302,7 @@ contexts:
     - match: ^\t([-@]{1,2})?
       captures:
         1: constant.language.makefile
-      push: shell
+      push: shell-common
     - match: ^([ ]+)([-@]{1,2})?
       captures:
         1: invalid.illegal.inconsistent.expected.tab.makefile
@@ -316,26 +315,14 @@ contexts:
     - include: control-flow
     - match: ^\n
 
-  shell:
-    # Due to how the shell syntax handles comments, we must account for the case
-    # where a recipe-line is a single comment in combination with an "@" or "-"
-    # from Make.
-    - match: \s*(#)
-      captures:
-        1: punctuation.definition.comment.begin.shell
-      set:
-        # I don't like putting the string "source.shell" here, as the delegation
-        # seeps into this syntax now. But I don't see a cleaner way right now.
-        - meta_scope: source.shell comment.line.number-sign.shell
-        - include: comments-pop-on-line-end
-    # Otherwise, delegate to the shell syntax (with various extra prototypes).
-    - match: ""
-      set: scope:source.shell
-      with_prototype:
-        - include: pop-on-line-end
-        - include: scope:source.shell#prototype
-        - include: line-continuation
-        - include: variable-substitutions
+  shell-common:
+    - meta_content_scope: source.shell.embedded.makefile
+    - include: pop-on-line-end
+    - include: shell-content
+
+  shell-content:
+    - include: Packages/Makefile/Makefile Shell.sublime-syntax
+      apply_prototype: true
 
   line-continuation:
     - match: (\\)([ ]*)$\n?
@@ -358,6 +345,7 @@ contexts:
     - match: "'"
       scope: punctuation.definition.string.begin.makefile
       push:
+        - meta_include_prototype: false
         - meta_scope: meta.string.makefile string.quoted.single.makefile
         - match: "'"
           scope: punctuation.definition.string.end.makefile
@@ -368,6 +356,7 @@ contexts:
     - match: '"'
       scope: punctuation.definition.string.begin.makefile
       push:
+        - meta_include_prototype: false
         - meta_scope: meta.string.makefile string.quoted.double.makefile
         - match: '"'
           scope: punctuation.definition.string.end.makefile
@@ -380,11 +369,6 @@ contexts:
     - match: \\.
       scope: constant.character.escape.makefile
 
-  comments-pop-on-line-end:
-    - include: line-continuation
-    - match: $\n?
-      pop: true
-
   comments:
     # This hack is here in order to circumvent false-positives for the big
     # rule lookahead. For example, if this match is not present, then things
@@ -394,19 +378,24 @@ contexts:
     #
     # will match the rule-lookahead.
     - match: (?=^\s*#)
-      push:
-        - match: \#
-          scope: punctuation.definition.comment.makefile
-          set:
-            - meta_scope: comment.line.number-sign.makefile
-            - include: comments-pop-on-line-end
+      push: comment
     # This is the "normal" comment parsing logic, but not sufficient in every
     # case (see above).
     - match: \#
       scope: punctuation.definition.comment.makefile
-      push:
-        - meta_scope: comment.line.number-sign.makefile
-        - include: comments-pop-on-line-end
+      push: comment-body
+
+  comment:
+    - match: \#
+      scope: punctuation.definition.comment.makefile
+      set: comment-body
+
+  comment-body:
+    - meta_scope: comment.line.number-sign.makefile
+    - include: line-continuation
+    - match: \\\\
+    - match: \n
+      pop: true
 
   inside-function-call:
     - meta_content_scope: meta.function-call.arguments.makefile
@@ -520,18 +509,11 @@ contexts:
         1: keyword.other.block.begin.makefile
         2: support.function.builtin.makefile
       push:
+        - meta_content_scope: source.shell.embedded.makefile
         - match: \)
           scope: keyword.other.block.end.makefile
           pop: true
-        - match: ''
-          push: scope:source.shell
-          with_prototype:
-            - match: (?=\))
-              pop: true
-            - include: variable-substitutions
-            - include: quoted-string
-            - match: \(
-              push: textual-parenthesis-balancer
+        - include: shell-content
 
   variable-definitions:
     - match: \s*(override)\b
@@ -564,11 +546,7 @@ contexts:
           set:
             - match: '!='
               scope: keyword.operator.assignment.makefile
-              set: scope:source.shell
-              with_prototype:
-                - include: variable-substitutions
-                - include: pop-on-line-end
-                - include: textual-parenthesis-balancer
+              set: shell-common
         - match: (?=\s*(!|\?|\+|::?)?=)
           set:
             - match: (!|\?|\+|::?)?=
@@ -593,8 +571,8 @@ contexts:
       captures:
         1: meta.string.makefile string.unquoted.makefile
         2: meta.string.makefile meta.interpolation.makefile punctuation.section.interpolation.begin.makefile
-      embed: scope:source.shell
-      embed_scope: meta.string.makefile meta.interpolation.makefile
+      embed: shell-content
+      embed_scope: meta.string.makefile meta.interpolation.makefile source.shell.embedded.makefile
       escape: (?!<\\)\2
       escape_captures:
         0: meta.string.makefile meta.interpolation.makefile punctuation.section.interpolation.end.makefile
@@ -605,12 +583,7 @@ contexts:
     - meta_content_scope: meta.string.makefile string.unquoted.makefile
     - include: escape-literals
     - match: (?=#)
-      set:
-        - match: \#
-          scope: punctuation.definition.comment.makefile
-          set:
-            - meta_scope: comment.line.number-sign.makefile
-            - include: comments-pop-on-line-end
+      set: comment
     - include: variable-substitutions
     - include: continuation-or-pop-on-line-end
 
